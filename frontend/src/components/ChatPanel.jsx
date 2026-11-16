@@ -3,10 +3,14 @@ import TripForm from "./TripForm.jsx";
 
 export default function ChatPanel({ messages, loading, trip, onSend, onPlanTrip, onReset }) {
   const [value, setValue] = useState("");
-  const bottomRef = useRef(null);
+  const messagesRef = useRef(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const messageList = messagesRef.current;
+    if (messageList) {
+      const showTripForm = messages.length <= 1 && !loading && !trip;
+      messageList.scrollTop = showTripForm ? 0 : messageList.scrollHeight;
+    }
   }, [messages, loading, trip]);
 
   function submit(event) {
@@ -25,18 +29,18 @@ export default function ChatPanel({ messages, loading, trip, onSend, onPlanTrip,
           <strong>Hi! 👋</strong>
           <p>I'm your travel assistant.<br />Where would you like to go?</p>
         </div>
+        {trip && <button type="button" className="new-trip-button" onClick={onReset} disabled={loading}>New trip</button>}
       </div>
 
-      <div className="chat-messages">
+      <div className="chat-messages" ref={messagesRef} role="region" aria-label="Chat messages" tabIndex={0}>
         {messages.map((message) => (
           <div className={`message-row ${message.role}`} key={message.id}>
             {message.role === "assistant" && <span className="mini-robot">🤖</span>}
             <div className="message-bubble">{message.content}</div>
           </div>
         ))}
-        {!trip && <TripForm onSubmit={onPlanTrip} />}
+        {!trip && <TripForm onSubmit={onPlanTrip} loading={loading} />}
         {loading && <div className="message-row assistant"><span className="mini-robot">🤖</span><div className="message-bubble loading">● ● ● &nbsp; Searching travel options...</div></div>}
-        <div ref={bottomRef} />
       </div>
 
       

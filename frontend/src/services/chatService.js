@@ -1,35 +1,11 @@
-import { demoTrip } from "../data/demoData";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const USE_DEMO_MODE = true;
+export async function fetchCities(signal) {
+  const response = await fetch(`${API_BASE_URL}/api/cities`, { signal });
+  return response.ok ? response.json() : [];
+}
 
-const AIRPORT_CODES = {
-  Ahmedabad: "AMD", Bengaluru: "BLR", Chennai: "MAA", Delhi: "DEL", Goa: "GOI",
-  Hyderabad: "HYD", Jaipur: "JAI", Kochi: "COK", Kolkata: "CCU", Mumbai: "BOM",
-  Pune: "PNQ", Udaipur: "UDR", Varanasi: "VNS", Visakhapatnam: "VTZ"
-};
-
-export async function sendChatMessage(message, sessionId = "travelbuddy-demo", trip = null) {
-  if (USE_DEMO_MODE) {
-    await new Promise((resolve) => setTimeout(resolve, 650));
-    const base = { ...demoTrip };
-    if (trip) {
-      base.destination = trip.to;
-      base.tagline = `${trip.from} → ${trip.to}`;
-      base.flights = demoTrip.flights.map((f) => ({
-        ...f,
-        departureCode: AIRPORT_CODES[trip.from] || f.departureCode,
-        arrivalCode: AIRPORT_CODES[trip.to] || f.arrivalCode
-      }));
-    }
-    return {
-      answer: trip
-        ? `Got it! Here are demo options for ${trip.from} → ${trip.to}. These are sample results for the frontend preview, not live prices.`
-        : `I've prepared some travel options based on your message: "${message}". These are demo results for the frontend preview, not live prices.`,
-      ...base
-    };
-  }
-
+export async function sendChatMessage(message, sessionId, trip = null) {
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -49,7 +25,12 @@ export async function sendChatMessage(message, sessionId = "travelbuddy-demo", t
   });
 
   if (!response.ok) {
-    throw new Error(`Backend request failed: ${response.status}`);
+    if (response.status === 422) {
+      const error = await response.json();
+      const detail = typeof error.detail === "string" ? error.detail : error.detail?.[0]?.msg;
+      throw new Error(detail || "Check the trip details and try again.");
+    }
+    throw new Error("The travel service is temporarily unavailable. Please try again.");
   }
 
   return response.json();

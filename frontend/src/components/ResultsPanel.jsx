@@ -1,108 +1,177 @@
-import { useEffect, useState } from "react";
-import { fetchDestinationImage, getDestinationImage } from "../data/destinationImages.js";
+import { useState } from "react";
+import DestinationHero from "./DestinationHero.jsx";
+import { resultImages } from "../data/resultImages.js";
 
-function SectionHeader({ icon, title }) {
-  return <div className="section-header"><h2><span>{icon}</span>{title}</h2><button type="button" className="view-all">View all <b>→</b></button></div>;
+function ResultImage({ category, url, logo = false }) {
+  const [failedUrl, setFailedUrl] = useState(null);
+  const source = typeof url === "string" && url.startsWith("https://") && url !== failedUrl ? url : null;
+  const fallback = resultImages[category];
+  return (
+    <figure className={`result-image${logo && source ? " airline-logo" : ""}`}>
+      {(source || failedUrl !== fallback) && (
+        <img src={source || fallback} alt="" loading="lazy" onError={() => setFailedUrl(source || fallback)} />
+      )}
+      {!source && <figcaption>Illustrative photo</figcaption>}
+    </figure>
+  );
 }
 
-function FlightCard({ flight }) {
+function ExternalLink({ url, children }) {
+  if (!url || !/^https:\/\//i.test(url)) return null;
+  return <a className="book-button" href={url} target="_blank" rel="noopener noreferrer">{children} ↗</a>;
+}
+
+function formatPrice(price, currency = "INR") {
+  if (typeof price !== "number") return "Price unavailable";
+  return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 2 }).format(price);
+}
+
+function EmptyResults({ label, result, loading }) {
+  let message = `Ask the assistant to search for ${label}.`;
+  if (loading) message = "Checking travel options…";
+  else if (result === null) message = `${label[0].toUpperCase() + label.slice(1)} are temporarily unavailable.`;
+  else if (result) message = `No ${label} found for this search.`;
+  return <p className="empty-state" role="status">{message}</p>;
+}
+
+function FlightCard({ flight, currency, fareType }) {
+  const segments = flight.segments || [];
+  const fareLabel = fareType === "one_way" ? "One-way fare"
+    : flight.outbound_id != null ? "Round-trip total" : "Round-trip fare from";
+  const carriers = [...new Map(segments.filter((segment) => segment.airline_website)
+    .map((segment) => [segment.airline_website, segment.airline])).entries()];
   return (
-    <article className="flight-card">
-      <div className="airline-name">✈ {flight.airline}</div>
-      <div className="flight-time"><strong>{flight.departureTime}</strong><small>{flight.departureCode}</small></div>
-      <div className="flight-duration"><strong>{flight.duration}</strong><small>{flight.stops}</small></div>
-      <div className="flight-time"><strong>{flight.arrivalTime}</strong><small>{flight.arrivalCode}</small></div>
-      <div className="flight-price"><strong>₹{Number(flight.price).toLocaleString("en-IN")}</strong><small className="source-tag">{flight.source || "Unverified"}</small></div>
-      <a className="book-button" href={flight.bookingUrl || undefined} target="_blank" rel="noreferrer">Book now ↗</a>
+    <article className="stay-card live-flight-card">
+      <ResultImage category="flights" url={flight.airline_logo} logo />
+      <div className="stay-info flight-details">
+        {flight.outbound_id != null && <p className="flight-note">Pairs with outbound option {flight.outbound_id}</p>}
+        {segments.map((segment, index) => (
+          <div className="flight-segment" key={index}>
+            <div className="flight-segment-title">
+              <strong>{segment.airline || "Flight"}</strong>
+              {segment.flight_number && <span className="flight-number">{segment.flight_number}</span>}
+            </div>
+            <div className="flight-timing">
+              <div><span>Departure</span><strong>{segment.departure_time || "Time unavailable"}</strong><span>{segment.from}</span></div>
+              <div><span>Arrival</span><strong>{segment.arrival_time || "Time unavailable"}</strong><span>{segment.to}</span></div>
+            </div>
+          </div>
+        ))}
+        {flight.total_duration_minutes != null && <p className="flight-note">{flight.total_duration_minutes} min total</p>}
+      </div>
+      <div className="stay-price">
+        <strong>{formatPrice(flight.price, currency)}</strong>
+        <small>{fareLabel}</small>
+      </div>
+      <div className="result-links">
+        {carriers.map(([url, name]) => <ExternalLink key={url} url={url}>Visit {name}</ExternalLink>)}
+        {!carriers.length && (flight.booking_link
+          ? <ExternalLink url={flight.booking_link}>Visit booking site</ExternalLink>
+          : <ExternalLink url={flight.search_link}>Search flights</ExternalLink>)}
+      </div>
     </article>
   );
 }
 
-function StayCard({ item, restaurant = false }) {
+function FlightSection({ leg, title, currency }) {
+  if (!leg) return null;
+  return (
+    <section className="result-section">
+      <div className="section-header"><h2>{title}</h2></div>
+      <p className="flight-route">{leg.source} → {leg.destination} · {leg.date}</p>
+      {leg.options.length ? leg.options.map((flight, index) => (
+        <div key={flight.id ?? index} className="flight-option">
+          {flight.id != null && <p className="flight-note flight-option-label">Outbound option {flight.id}</p>}
+          <FlightCard flight={flight} currency={currency} fareType={leg.fare_type} />
+        </div>
+      )) : <p className="empty-state">No options available for this leg.</p>}
+    </section>
+  );
+}
+
+function StayCard({ item, restaurant }) {
   return (
     <article className="stay-card">
-      <img src={item.image} alt={item.name} />
+      <ResultImage category={restaurant ? "restaurants" : "hotels"} url={item.image_url} />
       <div className="stay-info">
-        <h3>{item.name}</h3>
-        <p className="rating">★ <span>{item.rating} ({item.reviews})</span></p>
-        <p>📍 {item.location}</p>
-        <div className="chips">{(restaurant ? item.features : item.amenities || []).map((feature) => <span key={feature}>{feature}</span>)}</div>
-        <small className="source-tag">{item.source || "Unverified result"}</small>
+        <h3>{item.name || (restaurant ? "Restaurant" : "Hotel")}</h3>
+        {item.overall_rating != null && <p>★ {item.overall_rating}{item.reviews != null && ` (${item.reviews} reviews)`}</p>}
+        {item.address && <p>{item.address}</p>}
+        {typeof item.opening_hours === "string" && <p>{item.opening_hours}</p>}
       </div>
-      {!restaurant && <div className="stay-price"><strong>₹{Number(item.price).toLocaleString("en-IN")}</strong><small>/ night</small></div>}
-      {item.bookingUrl ? <a className="book-button" href={item.bookingUrl} target="_blank" rel="noreferrer">{restaurant ? "View place" : "Book now"} ↗</a> : <span className="no-link">No booking link</span>}
+      {!restaurant && (
+        <div className="stay-price">
+          <strong>{formatPrice(item.nightly_price, item.currency)}</strong>
+          {typeof item.nightly_price === "number" && <small>Per night</small>}
+        </div>
+      )}
+      <div className="result-links">
+        {restaurant ? <>
+          <ExternalLink url={item.website}>Visit website</ExternalLink>
+          <ExternalLink url={item.maps_link}>Open Maps</ExternalLink>
+        </> : item.property_website || item.link
+          ? <ExternalLink url={item.property_website || item.link}>Visit property site</ExternalLink>
+          : <ExternalLink url={item.search_link}>Search hotel</ExternalLink>}
+      </div>
     </article>
   );
 }
 
-export default function ResultsPanel({ data, activeTab, setActiveTab }) {
-  const tabs = [
-    ["flights", "✈", "Flights"],
-    ["hotels", "▰", "Hotels"],
-    ["restaurants", "♨", "Restaurants"]
-  ];
+const tabs = [
+  ["flights", "✈", "Flights"],
+  ["hotels", "▰", "Hotels"],
+  ["restaurants", "♨", "Restaurants"]
+];
 
-  const [wikiImage, setWikiImage] = useState(null);
-  const knownImage = getDestinationImage(data.destination, data.image);
+const previewCopy = {
+  flights: ["Find flights for your route", "Choose your cities and travel dates to compare airlines and departure times."],
+  hotels: ["Find a place to stay", "Plan an overnight trip to compare available hotels and nightly rates."],
+  restaurants: ["Find places to eat", "Choose a destination to discover nearby restaurants and see them on the map."],
+};
 
-  useEffect(() => {
-    let cancelled = false;
-    setWikiImage(null);
-    if (!knownImage && data.destination) {
-      fetchDestinationImage(data.destination).then((url) => {
-        if (!cancelled) setWikiImage(url);
-      });
-    }
-    return () => { cancelled = true; };
-  }, [data.destination, knownImage]);
-
-  const heroImage = knownImage || wikiImage;
-
+export default function ResultsPanel({ data, loading, activeTab, setActiveTab }) {
+  const destination = data.destination;
+  const result = data[activeTab];
+  const items = result?.[activeTab] || [];
+  const displayedItems = activeTab === "hotels"
+    ? [...items].sort((first, second) => (first.nightly_price ?? Infinity) - (second.nightly_price ?? Infinity))
+    : items;
   return (
-    <section className="results-panel">
-      <div
-        className="destination-hero"
-        style={{
-          backgroundImage: heroImage
-            ? `linear-gradient(90deg, rgba(7,26,59,.56), rgba(7,26,59,.03)), url("${heroImage}")`
-            : "linear-gradient(135deg, #1769e8, #3b8bff)"
-        }}
-      >
-        <div className="hero-content">
-          <h1>📍 {data.destination || "Your destination"}</h1>
-          <p>{data.tagline || "Your next adventure starts here"}</p>
-        </div>
-        <button className="download-button" type="button" onClick={() => window.alert("PDF itinerary export can be added next.")}>⇩ Download itinerary</button>
-      </div>
+    <section className="results-panel" aria-label="Trip results" aria-busy={loading} tabIndex={0}>
+      <DestinationHero destination={destination} />
 
-      <div className="tabs">
+      <div className="tabs" aria-label="Result categories">
         {tabs.map(([id, icon, label]) => (
-          <button key={id} type="button" onClick={() => setActiveTab(id)} className={activeTab === id ? "selected" : ""}>
-            <span>{icon}</span>{label}
+          <button key={id} type="button" onClick={() => setActiveTab(id)} aria-pressed={activeTab === id} className={activeTab === id ? "selected" : ""}>
+            <span aria-hidden="true">{icon}</span>{label}
           </button>
         ))}
       </div>
 
-      {activeTab === "flights" && (
+      {activeTab === "flights" && result ? (
+        <>
+          <FlightSection leg={result.outbound} title="Outbound flights" currency={result.currency} />
+          <FlightSection leg={result.return} title="Return flights" currency={result.currency} />
+          {result.warnings?.map((warning) => <p className="disclaimer" key={warning}>{warning}</p>)}
+        </>
+      ) : (
         <section className="result-section">
-          <SectionHeader icon="✈" title="Flight Options" />
-          {data.flights?.length ? data.flights.map((flight) => <FlightCard key={flight.id} flight={flight} />) : <p className="empty-state">No flights found yet. Ask the assistant to search.</p>}
-        </section>
-      )}
-      {activeTab === "hotels" && (
-        <section className="result-section">
-          <SectionHeader icon="▰" title="Top Hotels" />
-          {data.hotels?.length ? data.hotels.map((hotel) => <StayCard key={hotel.id} item={hotel} />) : <p className="empty-state">No hotels found yet. Ask the assistant to search.</p>}
-        </section>
-      )}
-      {activeTab === "restaurants" && (
-        <section className="result-section">
-          <SectionHeader icon="♨" title="Popular Restaurants" />
-          {data.restaurants?.length ? data.restaurants.map((restaurant) => <StayCard key={restaurant.id} item={restaurant} restaurant />) : <p className="empty-state">No restaurants found yet. Ask the assistant to search.</p>}
+          <div className="section-header"><h2>{tabs.find(([id]) => id === activeTab)[2]}</h2></div>
+          {displayedItems.length ? displayedItems.map((item, index) => (
+            <StayCard key={index} item={item} restaurant={activeTab === "restaurants"} />
+          )) : !destination && !loading && result === undefined ? (
+            <div className="results-preview">
+              <ResultImage key={activeTab} category={activeTab} />
+              <div>
+                <h3>{previewCopy[activeTab][0]}</h3>
+                <p>{previewCopy[activeTab][1]}</p>
+              </div>
+            </div>
+          ) : <EmptyResults label={activeTab} result={result} loading={loading} />}
         </section>
       )}
 
-      <p className="disclaimer">Demo data is shown for layout preview. Verify live prices, availability and booking details with providers.</p>
+      {result && <p className="disclaimer">Verify prices and availability with the provider before booking.</p>}
     </section>
   );
 }

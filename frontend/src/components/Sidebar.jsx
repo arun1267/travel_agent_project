@@ -1,8 +1,6 @@
 const items = [
   ["💬", "Chat Planner", "chat"],
-  ["▦", "My Trips", "trips"],
-  ["♡", "Favorites", "favorites"],
-  ["⚙", "Settings", "settings"]
+  ["▦", "My Trips", "trips"]
 ];
 
 export default function Sidebar({ activePage, onNavigate }) {

@@ -7,6 +7,8 @@ import os
 from typing import Any
 
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 
 class TravelMemory:
@@ -19,7 +21,10 @@ class TravelMemory:
         ttl_seconds: int = 60 * 60 * 6,  # 6 hours
     ):
         url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        self.client = redis.from_url(url, decode_responses=True)
+        self.client = redis.from_url(
+            url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1,
+            retry=Retry(NoBackoff(), 0),
+        )
         self.prefix = prefix
         self.ttl = ttl_seconds
 
