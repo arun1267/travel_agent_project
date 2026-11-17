@@ -133,7 +133,7 @@ const previewCopy = {
 
 function AttractionCard({ place, destination, loading, onAsk }) {
   const location = place.address || destination;
-  const question = `What should I know before visiting ${place.name}${location ? ` in ${location}` : ""}?`;
+  const question = `Tell me about the history of ${place.name}${location ? ` in ${location}` : ""} and what I should know before visiting.`;
   return (
     <article className="stay-card">
       <div className="stay-info">

@@ -40,6 +40,7 @@ TOOL_RESULTS = {
     "search_restaurants": ("Restaurant", "restaurants"),
     "search_attractions": ("Attraction", "attractions"),
 }
+THINKING_BLOCK = re.compile(r"<thinking\b[^>]*>.*?(?:</thinking\s*>|\Z)", re.IGNORECASE | re.DOTALL)
 RETRYABLE_BEDROCK_CODES = {"ModelTimeoutException", "ModelNotReadyException", "ThrottlingException"}
 LOGGED_BEDROCK_CODES = RETRYABLE_BEDROCK_CODES | {
     "AccessDeniedException", "ValidationException", "ResourceNotFoundException",
@@ -381,7 +382,7 @@ class TravelAgent:
                         for block in assistant_message.get("content", [])
                         if "text" in block
                     ]
-                    answer = "\n".join(answer_parts).strip()
+                    answer = THINKING_BLOCK.sub("", "\n".join(answer_parts)).strip()
                     if not answer:
                         return partial_answer("I couldn't generate a text response. Please try again.")
                     return finish(answer)
@@ -507,6 +508,8 @@ class TravelAgent:
         for item in chat_messages:
             role = item.get("role")
             content = item.get("content", "")
+            if role == "assistant":
+                content = THINKING_BLOCK.sub("", content).strip()
             if role in ("user", "assistant") and content:
                 history.append({"role": role, "content": [{"text": content}]})
         return history

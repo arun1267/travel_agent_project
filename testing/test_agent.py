@@ -182,6 +182,21 @@ def test_place_follow_up_receives_saved_attraction_details(agent):
     assert "Sinquerim, Goa" in message
 
 
+def test_chat_omits_thinking_text_from_reply_and_history(agent):
+    agent.memory.append_message("trip", "assistant", "<thinking>Old notes</thinking>We found Charminar.")
+    agent.client.converse.return_value = reply(
+        {"text": "<thinking>Use the saved place."},
+        {"text": "</thinking>\nCharminar is a historic monument in Hyderabad."
+                 "\n<thinking>Unfinished internal notes"},
+        {"reasoningContent": {"reasoningText": {"text": "Structured reasoning"}}},
+    )
+    result = agent.chat("Tell me about Charminar's history", "trip")
+    assert result == "Charminar is a historic monument in Hyderabad."
+    assert agent.memory.get_messages("trip")[-1]["content"] == result
+    messages = agent.client.converse.call_args.kwargs["messages"]
+    assert messages[0]["content"] == [{"text": "We found Charminar."}]
+
+
 def test_redis_outage_allows_current_chat_to_continue(agent):
     agent.memory.client.get.side_effect = ConnectionError("offline")
     agent.client.converse.return_value = reply({"text": "I can help with this trip."})
