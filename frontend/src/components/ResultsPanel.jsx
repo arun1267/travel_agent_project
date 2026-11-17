@@ -120,16 +120,39 @@ function StayCard({ item, restaurant }) {
 const tabs = [
   ["flights", "✈", "Flights"],
   ["hotels", "▰", "Hotels"],
-  ["restaurants", "♨", "Restaurants"]
+  ["restaurants", "♨", "Restaurants"],
+  ["attractions", "📍", "Places to Visit"],
 ];
 
 const previewCopy = {
   flights: ["Find flights for your route", "Choose your cities and travel dates to compare airlines and departure times."],
   hotels: ["Find a place to stay", "Plan an overnight trip to compare available hotels and nightly rates."],
   restaurants: ["Find places to eat", "Choose a destination to discover nearby restaurants and see them on the map."],
+  attractions: ["Find places to visit", "Plan a trip to discover nearby sights and open their locations in Maps."],
 };
 
-export default function ResultsPanel({ data, loading, activeTab, setActiveTab }) {
+function AttractionCard({ place, destination, loading, onAsk }) {
+  const location = place.address || destination;
+  const question = `What should I know before visiting ${place.name}${location ? ` in ${location}` : ""}?`;
+  return (
+    <article className="stay-card">
+      <div className="stay-info">
+        <h3>{place.name}</h3>
+        {place.address && <p>{place.address}</p>}
+        {typeof place.opening_hours === "string" && <p>{place.opening_hours}</p>}
+      </div>
+      <div className="result-links">
+        <ExternalLink url={place.website}>Visit website</ExternalLink>
+        <ExternalLink url={place.maps_link}>Open Maps</ExternalLink>
+        <button className="book-button" type="button" disabled={loading} onClick={() => onAsk(question)}>
+          Ask about this place
+        </button>
+      </div>
+    </article>
+  );
+}
+
+export default function ResultsPanel({ data, loading, activeTab, setActiveTab, onAsk }) {
   const destination = data.destination;
   const result = data[activeTab];
   const items = result?.[activeTab] || [];
@@ -158,20 +181,24 @@ export default function ResultsPanel({ data, loading, activeTab, setActiveTab })
         <section className="result-section">
           <div className="section-header"><h2>{tabs.find(([id]) => id === activeTab)[2]}</h2></div>
           {displayedItems.length ? displayedItems.map((item, index) => (
-            <StayCard key={index} item={item} restaurant={activeTab === "restaurants"} />
+            activeTab === "attractions"
+              ? <AttractionCard key={index} place={item} destination={result.destination || destination} loading={loading} onAsk={onAsk} />
+              : <StayCard key={index} item={item} restaurant={activeTab === "restaurants"} />
           )) : !destination && !loading && result === undefined ? (
             <div className="results-preview">
-              <ResultImage key={activeTab} category={activeTab} />
+              {activeTab !== "attractions" && <ResultImage key={activeTab} category={activeTab} />}
               <div>
                 <h3>{previewCopy[activeTab][0]}</h3>
                 <p>{previewCopy[activeTab][1]}</p>
               </div>
             </div>
-          ) : <EmptyResults label={activeTab} result={result} loading={loading} />}
+          ) : <EmptyResults label={activeTab === "attractions" ? "places to visit" : activeTab} result={result} loading={loading} />}
         </section>
       )}
 
-      {result && <p className="disclaimer">Verify prices and availability with the provider before booking.</p>}
+      {result && <p className="disclaimer">{activeTab === "attractions"
+        ? "Check current opening hours and entry fees before visiting."
+        : "Verify prices and availability with the provider before booking."}</p>}
     </section>
   );
 }

@@ -536,12 +536,19 @@ class TravelTools:
         places = []
         for feature in data.get("features") or []:
             prop = feature.get("properties", {})
+            name = prop.get("name")
+            if not name:
+                continue
+            address = prop.get("formatted") or prop.get("address_line2")
             places.append(
                 {
-                    "name": prop.get("name"),
-                    "address": prop.get("formatted") or prop.get("address_line2"),
+                    "name": name,
+                    "address": address,
                     "categories": prop.get("categories", []),
-                    "website": prop.get("website"),
+                    "website": public_link(prop.get("website")),
+                    "maps_link": "https://www.google.com/maps/search/?" + urlencode({
+                        "api": 1, "query": f"{name} {address or formatted}",
+                    }),
                     "opening_hours": prop.get("opening_hours"),
                     "distance_meters": prop.get("distance"),
                     "latitude": prop.get("lat"),

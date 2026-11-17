@@ -1,9 +1,21 @@
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
 
 from tools import DestinationNotFound, SearchUnavailable
+
+
+def test_attraction_includes_maps_link(tools, http_get, response):
+    http_get.side_effect = [
+        response({"results": [{"lat": 15.5, "lon": 73.8, "formatted": "Goa, India"}]}),
+        response({"features": [{"properties": {"name": "Fort Aguada", "formatted": "Sinquerim, Goa"}}]}),
+    ]
+    place = tools.search_attractions("Goa")["attractions"][0]
+    maps_url = urlsplit(place["maps_link"])
+    assert maps_url.hostname == "www.google.com"
+    assert parse_qs(maps_url.query)["query"] == ["Fort Aguada Sinquerim, Goa"]
 
 
 @pytest.mark.parametrize(("place", "expected"), [

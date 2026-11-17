@@ -170,6 +170,18 @@ def test_follow_up_includes_same_session_history_and_search_context(agent, monke
     dispatch.assert_called_once()
 
 
+def test_place_follow_up_receives_saved_attraction_details(agent):
+    agent.memory.save_tool_result("goa", "search_attractions", {
+        "destination": "Goa, India",
+        "attractions": [{"name": "Fort Aguada", "address": "Sinquerim, Goa"}],
+    })
+    agent.client.converse.return_value = reply({"text": "Fort Aguada is in Sinquerim."})
+    agent.chat("What is that fort known for?", "goa")
+    message = agent.client.converse.call_args.kwargs["messages"][0]["content"][0]["text"]
+    assert "Fort Aguada" in message
+    assert "Sinquerim, Goa" in message
+
+
 def test_redis_outage_allows_current_chat_to_continue(agent):
     agent.memory.client.get.side_effect = ConnectionError("offline")
     agent.client.converse.return_value = reply({"text": "I can help with this trip."})

@@ -4,7 +4,9 @@ TravelBuddy is a travel planner for trips within India. The Python agent
 searches for flights, hotels, restaurants, and attractions, then
 uses Amazon Bedrock to draft an itinerary and explain a Python-calculated
 budget. The React and Vite app sends trip requests and follow-ups to FastAPI
-and displays live search results in the Flights, Hotels, and Restaurants tabs.
+and displays live search results in the Flights, Hotels, Restaurants, and
+Places to Visit tabs. Place cards link to Maps and let travellers ask the
+assistant about a specific attraction.
 
 ## Architecture
 

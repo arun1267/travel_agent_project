@@ -112,7 +112,7 @@ export default function App() {
         {activePage === "chat" ? (
           <div className="dashboard">
             <ChatPanel messages={messages} loading={loading} trip={trip} onSend={handleSend} onPlanTrip={handlePlanTrip} onReset={handleReset} />
-            <ResultsPanel data={data} loading={loading} activeTab={activeTab} setActiveTab={setActiveTab} />
+            <ResultsPanel data={data} loading={loading} activeTab={activeTab} setActiveTab={setActiveTab} onAsk={handleSend} />
           </div>
         ) : (
           <section className="placeholder-page">

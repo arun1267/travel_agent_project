@@ -198,7 +198,18 @@ class TravelAgent:
             hotels = stored["hotels"].get("hotels") or []
             parts.append(f"Previous hotel search has {len(hotels)} hotels stored.")
         if stored.get("attractions"):
-            parts.append("Previous attractions results are stored.")
+            result = stored["attractions"]
+            places = [
+                {field: place[field] for field in ("name", "address", "categories", "opening_hours")
+                 if place.get(field)}
+                for place in (result.get("attractions") or [])[:20]
+                if place.get("name")
+            ]
+            if places:
+                parts.append("Previous places to visit (map data): " + json.dumps({
+                    "destination": result.get("destination"),
+                    "places": places,
+                }, ensure_ascii=False))
         if stored.get("restaurants"):
             parts.append("Previous restaurant results are stored.")
 
