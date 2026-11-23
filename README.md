@@ -3,10 +3,11 @@
 TravelBuddy is a travel planner for trips within India. The Python agent
 searches for flights, hotels, restaurants, and attractions, then
 uses Amazon Bedrock to draft an itinerary and explain a Python-calculated
-budget. The React and Vite app sends trip requests and follow-ups to FastAPI
-and displays live search results in the Flights, Hotels, Restaurants, and
-Places to Visit tabs. Place cards link to Maps and let travellers ask the
-assistant about a specific attraction.
+budget. After signing in, travellers can send trip requests and follow-ups
+through the React app. FastAPI protects access to each chat session. Search
+results appear in the Flights, Hotels, Restaurants, and Places to Visit tabs.
+Place cards link to Maps and let travellers ask the assistant about a
+specific attraction.
 
 ## Architecture
 
@@ -33,9 +34,13 @@ flowchart LR
 
 - `backend/main.py` validates requests, loads backend configuration, and
   serves the API.
+- `backend/auth.py` manages sign-up, sign-in, bearer tokens, rate limits, and
+  chat session ownership. The account file stores salted password hashes.
 - `backend/agent.py` coordinates Bedrock, travel searches, and budget estimates.
   `backend/prompt.py` defines the agent's instructions.
 - `backend/tools.py` calls the providers and normalizes their results.
+  `backend/tool_arguments.py` defines the argument schemas used by Bedrock
+  and enforced by the dispatcher before it calls a provider.
   `backend/flight_view.py` formats flight results for the API and Flights tab.
 - `backend/memory.py` stores session history and results in Redis.
   `backend/log.py` records request and provider events.
@@ -45,12 +50,14 @@ flowchart LR
 
 ## Agent workflow
 
-1. A Python caller passes a travel request and a session ID to
-   `TravelAgent.chat`. A request can include the route, dates, trip type,
-   traveller count, and budget.
+1. The app sends a bearer token with the chat request. FastAPI validates
+   the token, applies the rate limit, and creates a session or verifies
+   ownership of an existing one. The trip form supplies structured route,
+   dates, trip type, traveller count, and budget.
 2. The agent loads session history from Redis and sends the request and
-   available tool schemas to Bedrock Converse. Bedrock selects tools. Python
-   runs independent searches in the same Bedrock tool batch concurrently on
+   available tool schemas to Bedrock Converse. The dispatcher checks each
+   model-generated tool name, argument type, range, and date before running
+   the search. Python runs independent searches in the same tool batch on
    up to four worker threads. Each provider call uses synchronous HTTP.
    A later tool batch starts after the current batch finishes.
 3. The tools resolve airport codes and destinations, normalize provider
@@ -58,14 +65,17 @@ flowchart LR
    For a round trip, the flight tool runs the outbound search first and the
    return search second. Each leg has its own fare and up to five options.
    A standalone one-way search returns up to six options.
-4. Python calculates an indicative subtotal from usable flight and hotel
-   fares and estimated daily expenses. The subtotal identifies missing costs.
+4. Python calculates the budget using the trip form and the structured
+   search results. It uses the stay duration and traveller count when known.
+   Food, local transport, and miscellaneous rates are estimates. When any
+   cost is missing, the calculation reports a subtotal and lists missing costs.
 5. Bedrock drafts the itinerary from the search results. Python appends the
    round-trip flight lists and search notices. A failed search can leave other
    results usable, and a Bedrock timeout can return a partial summary.
-6. Redis stores chat messages and structured results per session, with a
-   six-hour expiry. Follow-ups receive the chat history and a summary of
-   saved search results.
+6. Redis stores chat messages and the latest structured results per search
+   type, with a six-hour expiry. Follow-ups receive the exact saved flight and
+   hotel details from that session, including return option order, flight
+   times, fares, nightly rates, and total stay prices when available.
 
 ## Integrations
 
@@ -81,16 +91,25 @@ flowchart LR
 - **Geoapify** geocodes the destination and queries its Places API for nearby
   restaurants and attractions. The geocoding result also supplies the
   destination snapshot.
-- **Redis** persists chat and search state. The request can continue if Redis
-  is unavailable, with reduced continuity across turns.
+- **Redis** stores chat history, search results, and, by default, access tokens,
+  session ownership, and rate counters. Redis-backed authentication requires a
+  reachable Redis server. Local memory mode supports sign-in without Redis.
 - **Wikipedia and Unsplash** supply destination images for the React app.
 
 ## Local setup
 
 ### Terminal 1 · Python backend
 
-Use Python 3.12 to match CI. Run these PowerShell commands from the repository
-root in your Python environment:
+Use Python 3.12 to match CI. From the repository root, create the Conda
+environment once if you use Conda. If you already have `bot`, activate it.
+
+```powershell
+conda create --name bot python=3.12 -y
+conda activate bot
+python --version
+```
+
+With your Python environment active, run:
 
 ```powershell
 python -m pip install -r backend/requirements.txt
@@ -155,6 +174,11 @@ starting or building Vite if you use a different address.
 ## API endpoints
 
 - `GET /health` checks the HTTP process without contacting providers.
+- `GET /ready` returns HTTP 200 when the account file location is accessible,
+  provider configuration is present, and Redis responds. It returns HTTP 503
+  with the failed check names when a dependency is unavailable. Local memory
+  mode reports Redis as skipped. The check makes no paid provider calls and
+  does not verify credentials with Bedrock or the travel providers.
 - `GET /api/cities` lists Indian airport cities for the trip form.
 - `POST /api/auth/signup` creates an account from `username` and `password`.
   Usernames are case-insensitive. Passwords must have at least 12 characters.
@@ -167,8 +191,8 @@ starting or building Vite if you use a different address.
   Sessions expire after six hours of inactivity. A trip accepts `source`,
   `destination`, `trip_type` (`round` or `oneway`), `travellers`,
   `start_date`, optional `budget`, and `end_date` for round trips.
-  The response includes `answer`, `results`, `notices`, `budget`, and
-  `outcome`. Results contain the searches performed in the current request.
+  The response includes `session_id`, `answer`, `results`, `notices`,
+  `budget`, and `outcome`. Results contain searches from the current request.
   A missing category means it was not searched. A null result means its
   search failed and no result was available.
 - `POST /api/flights` accepts the same fields as `trip` in the chat request.
@@ -192,7 +216,8 @@ property link. Use `search_link` when a website is missing. These website
 links open the airline or property site for the traveller to book there.
 Restaurants include a Maps link and a website when available.
 
-In Swagger UI, call **POST /api/auth/login**, then paste the returned access
+In Swagger UI, create an account with **POST /api/auth/signup** if needed.
+Call **POST /api/auth/login**, then paste the returned access
 token into **Authorize**. Open **POST /api/flights → Try it out** and submit this example
 with future travel dates. Check the **Response body** for
 `outbound.options` and `return.options`.
@@ -213,10 +238,10 @@ with future travel dates. Check the **Response body** for
 - **Python backend.** With the repository root as the Render service root,
   install `backend/requirements.txt` and start with
   `python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port "$PORT"`.
-  In the Render backend service's **Environment** page, set `APIFY_TOKEN` for
-  flights, `SERPAPI_KEY` for hotels, `GEOAPIFY_KEY` for places, `REDIS_URL`,
-  and `CORS_ORIGINS`. Set `TRAVEL_ACCOUNTS_FILE` to a path on a persistent
-  writable volume and run one backend worker with file-based accounts.
+  Configure the provider keys, AWS credentials, `AWS_REGION`,
+  `BEDROCK_MODEL_ID`, `REDIS_URL`, and `CORS_ORIGINS` on the backend.
+  Set `TRAVEL_AUTH_STORE=redis` and point `TRAVEL_ACCOUNTS_FILE` to a path on
+  a persistent writable volume. Run one backend worker with file-based accounts.
   Serve the frontend and API over HTTPS.
   Open `/docs` on that deployed backend and try `POST /api/flights` with
   `source` set to `DEL`, `destination` set to `BOM`, `trip_type` set to
@@ -229,6 +254,19 @@ with future travel dates. Check the **Response body** for
 - **React app.** Set `VITE_API_BASE_URL` to the deployed API origin, run
   `npm ci` and `npm run build` in `frontend/`, then publish `frontend/dist/`
   to a static host. Include the frontend origin in the backend's `CORS_ORIGINS`.
+
+### Deployed smoke test
+
+1. Open `/health` and `/ready` on the deployed API origin. Both should return
+   HTTP 200, and `/ready` should report Redis as `ok` on a Redis deployment.
+2. Open the deployed frontend, create a test account, and sign in.
+3. Plan a round trip from Hyderabad to Goa using future dates. Verify the
+   chat response and check that the results include flight times and hotel
+   prices. Record one return flight and the total stay price of one hotel.
+4. In the same session, ask about those exact options. Compare the answer
+   with the original results. Sign out and confirm the sign-in page returns.
+5. Record the deployed revision and URLs, readiness output, and screenshots
+   of the trip and follow-up. Keep sign-in details out of the screenshots.
 
 ## Sample requests and expected output
 
@@ -248,21 +286,53 @@ Provider results and model wording vary by request.
 
 ## Testing and development
 
+### Backend tests
+
+Run these commands from the repository root:
+
 ```powershell
 python -m pip install -r testing/requirements.txt
 python -m pytest -c testing/pytest.ini
 ```
 
-The tests mock Apify, SerpApi, Geoapify, Bedrock, and Redis. They use no provider
-credentials or paid API calls. The
-[GitHub Actions workflow](.github/workflows/backend-tests.yml) runs pytest
-on pushes and pull requests. Keep each change and its tests in a focused
-commit. Use descriptive subjects such as `Sort round-trip flights by fare`
-or `Document backend configuration`.
+- `test_agent.py` covers Bedrock tool calls, prompt-injection scenarios,
+  follow-up context, and recovery from service errors.
+- `test_api.py` covers HTTP responses, sign-up and sign-in, session ownership,
+  rate limits, and readiness checks.
+- `test_tools.py` covers argument validation, provider response parsing, and
+  budget calculations.
+- `conftest.py` supplies shared fixtures and blocks unexpected network requests.
+  Pytest loads it automatically.
 
-The validation tests capture current behavior. The backend rejects a missing
-round-trip return date, can pass malformed departure dates to the provider
-for rejection, and clamps non-positive traveller counts to one.
+The tests simulate external services and use no paid provider calls. The
+[GitHub Actions workflow](.github/workflows/backend-tests.yml) runs this
+backend suite on pushes and pull requests with Python 3.12. From the
+repository root, run `npm --prefix frontend run build` to check the
+frontend production build separately.
+
+### AI evaluation
+
+[`testing/evaluation_cases.json`](testing/evaluation_cases.json) contains
+eight evaluation cases for tool selection, budget accuracy, hallucinations,
+and follow-up accuracy. Run the regular pytest suite first. Evaluate a real
+Bedrock model before deploying a model or prompt change and after changes
+to tool schemas, budgeting, or session memory.
+
+For a repeatable evaluation, give each case its own session. Replace
+`{departure}` with a future date and `{return_date}` with two days after it.
+Seed any `history` and `saved_results` for that session. When the model calls
+a tool, feed the supplied `tool_results` back through the agent. A null tool
+result represents an unavailable provider. Mock provider responses for
+tool-selection cases as well and record the model's actual calls. Pass
+`budget_inputs` directly to the agent when present.
+
+Compare tool names and arguments to the expected values, compare numeric
+budget fields exactly, and review answers against the stated facts.
+`flight_total` and `hotel_total` refer to `budget.flight.total` and
+`budget.hotel.total`. Mark a case as passed only when all of its checks
+pass. Report passed cases out of total for each metric and record the
+Bedrock model ID and code revision. The JSON is a dataset for manual
+review or an evaluation harness. Pytest does not run the live model evaluations.
 
 ## Request telemetry
 
@@ -294,8 +364,9 @@ credentials, and raw exception messages.
   restaurant opening hours with the venue before visiting.
 - Food, local transport, and miscellaneous costs are estimates. Missing
   fares or hotel prices can prevent a full budget comparison.
-- Follow-ups receive the conversation and a summary of saved results. Exact
-  option details may depend on what the previous answer included.
+- Saved search details cover the latest chat search of each type in the same
+  session. Standalone search endpoints return results directly. Redis is
+  required to recall chat history and previous searches across requests.
 - My Trips is a placeholder.
 
 ## Implementation and attribution

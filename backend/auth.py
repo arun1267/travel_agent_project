@@ -14,7 +14,9 @@ import redis
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from redis.backoff import NoBackoff
 from redis.exceptions import RedisError
+from redis.retry import Retry
 
 from local_auth_store import LocalAuthStore
 
@@ -75,6 +77,7 @@ def get_auth_store():
     return redis.from_url(
         os.getenv("REDIS_URL") or "redis://localhost:6379/0",
         decode_responses=True, socket_connect_timeout=1, socket_timeout=1,
+        retry=Retry(NoBackoff(), 0),
     )
 
 

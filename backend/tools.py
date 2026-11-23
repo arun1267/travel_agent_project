@@ -9,8 +9,10 @@ from urllib.parse import urlencode, urlsplit
 
 import airportsdata
 import requests
+from pydantic import ValidationError
 
 from log import log_event, track_operation
+from tool_arguments import TOOL_ARGUMENTS, InvalidToolArguments
 
 
 AIRLINE_WEBSITES = {
@@ -768,118 +770,31 @@ class TravelTools:
 
     @staticmethod
     def bedrock_tool_specs() -> list[dict[str, Any]]:
-        """Tool schemas expected by the Bedrock Converse API."""
+        """Advertise the same argument schemas the dispatcher enforces."""
+        descriptions = {
+            "search_flights": "Search domestic flights. For a round trip, provide a return date.",
+            "search_hotels": "Search hotel options for the destination and stay dates.",
+            "search_restaurants": "Find restaurants around the destination.",
+            "search_attractions": "Find attractions and get a short snapshot of the destination.",
+        }
         return [
             {
                 "toolSpec": {
-                    "name": "search_flights",
-                    "description": (
-                        "Search flights. Use trip_type=round_trip with return_date "
-                        "for two-way travel (includes return_options with times). "
-                        "Use trip_type=one_way with no return_date for one-way. "
-                        "Dates use YYYY-MM-DD. Prefer cheaper options when a budget "
-                        "is given."
-                    ),
-                    "inputSchema": {
-                        "json": {
-                            "type": "object",
-                            "properties": {
-                                "origin": {"type": "string"},
-                                "destination": {"type": "string"},
-                                "departure_date": {"type": "string"},
-                                "return_date": {"type": "string"},
-                                "trip_type": {
-                                    "type": "string",
-                                    "enum": ["round_trip", "one_way"],
-                                },
-                                "adults": {"type": "integer", "minimum": 1},
-                                "currency": {"type": "string"},
-                            },
-                            "required": [
-                                "origin",
-                                "destination",
-                                "departure_date",
-                                "adults",
-                            ],
-                        }
-                    },
+                    "name": name,
+                    "description": descriptions[name],
+                    "inputSchema": {"json": arguments.model_json_schema()},
                 }
-            },
-            {
-                "toolSpec": {
-                    "name": "search_hotels",
-                    "description": "Search hotel options for the destination and stay dates.",
-                    "inputSchema": {
-                        "json": {
-                            "type": "object",
-                            "properties": {
-                                "destination": {"type": "string"},
-                                "check_in_date": {"type": "string"},
-                                "check_out_date": {"type": "string"},
-                                "adults": {"type": "integer", "minimum": 1},
-                                "rooms": {"type": "integer", "minimum": 1},
-                                "currency": {"type": "string"},
-                            },
-                            "required": [
-                                "destination",
-                                "check_in_date",
-                                "check_out_date",
-                                "adults",
-                            ],
-                        }
-                    },
-                }
-            },
-            {
-                "toolSpec": {
-                    "name": "search_restaurants",
-                    "description": "Find restaurants around the destination.",
-                    "inputSchema": {
-                        "json": {
-                            "type": "object",
-                            "properties": {
-                                "destination": {"type": "string"},
-                                "radius_meters": {"type": "integer"},
-                                "limit": {"type": "integer"},
-                            },
-                            "required": ["destination"],
-                        }
-                    },
-                }
-            },
-            {
-                "toolSpec": {
-                    "name": "search_attractions",
-                    "description": (
-                        "Get a short place snapshot and a list of sights, "
-                        "viewpoints, parks and attractions near the destination. "
-                        "Always call this for the destination so the plan can "
-                        "recommend real places to visit."
-                    ),
-                    "inputSchema": {
-                        "json": {
-                            "type": "object",
-                            "properties": {
-                                "destination": {"type": "string"},
-                                "radius_meters": {"type": "integer"},
-                                "limit": {"type": "integer"},
-                            },
-                            "required": ["destination"],
-                        }
-                    },
-                }
-            },
+            }
+            for name, arguments in TOOL_ARGUMENTS.items()
         ]
 
-    def run_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Run only the tools exposed to the model."""
-        allowed = {
-            "search_flights": self.search_flights,
-            "search_hotels": self.search_hotels,
-            "search_restaurants": self.search_restaurants,
-            "search_attractions": self.search_attractions,
-        }
-        function = allowed.get(tool_name)
-        if function is None:
-            raise ValueError(f"Unknown tool requested by the model: {tool_name}")
-        return function(**arguments)
+    def run_tool(self, tool_name: str, arguments: Any) -> dict[str, Any]:
+        """Validate model input before dispatching a supported search."""
+        schema = TOOL_ARGUMENTS.get(tool_name) if isinstance(tool_name, str) else None
+        if schema is None:
+            raise InvalidToolArguments("Unknown tool requested by the model.")
+        try:
+            validated = schema.model_validate(arguments)
+        except ValidationError:
+            raise InvalidToolArguments("Invalid search arguments. Check the tool schema and dates.") from None
+        return getattr(self, tool_name)(**validated.model_dump(exclude_unset=True))

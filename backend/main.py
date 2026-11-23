@@ -13,9 +13,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints, model_validator
+from redis.exceptions import RedisError
 
 from agent import TravelAgent
-from auth import chat_session, get_auth_store, limit_api, login, logout, signup
+from auth import accounts_path, chat_session, get_auth_store, limit_api, load_accounts, login, logout, signup
 from flight_view import flight_view
 from log import log_event, track_request
 from tools import (
@@ -158,6 +159,38 @@ def run_search(method, **kwargs):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready", responses={503: {"description": "A required check failed"}})
+def readiness():
+    provider_keys = ("APIFY_TOKEN", "SERPAPI_KEY", "GEOAPIFY_KEY")
+    checks = {
+        "provider_configuration": all(os.getenv(key, "").strip() for key in provider_keys)
+        and bool(os.getenv("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0").strip()),
+        "accounts": False,
+    }
+    try:
+        path = accounts_path()
+        load_accounts(path)
+        checks["accounts"] = path.parent.is_dir() and os.access(path.parent, os.W_OK)
+    except (OSError, ValueError):
+        pass
+
+    if os.getenv("TRAVEL_AUTH_STORE") != "memory":
+        try:
+            checks["redis"] = bool(get_auth_store().ping())
+        except (RedisError, OSError, ValueError):
+            checks["redis"] = False
+
+    ready = all(checks.values())
+    statuses = {name: "ok" if passed else "unavailable" for name, passed in checks.items()}
+    if "redis" not in statuses:
+        statuses["redis"] = "skipped_local_mode"
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": statuses},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/cities")

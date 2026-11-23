@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError
 
 from auth import digest, get_auth_store, token_key
 from local_auth_store import LocalAuthStore
@@ -52,6 +53,50 @@ def agent_factory(monkeypatch):
 
 def test_health_does_not_initialize_agent(client, agent_factory):
     assert client.get("/health").json() == {"status": "ok"}
+    agent_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("mode", "redis_down", "missing_provider", "bad_accounts", "expected"),
+    [
+        ("redis", False, False, False, 200),
+        ("redis", True, False, False, 503),
+        ("redis", False, True, False, 503),
+        ("redis", False, False, True, 503),
+        ("memory", False, False, False, 200),
+    ],
+)
+def test_readiness_checks_dependencies(
+    client, agent_factory, auth_store, monkeypatch, tmp_path,
+    mode, redis_down, missing_provider, bad_accounts, expected,
+):
+    monkeypatch.setenv("TRAVEL_AUTH_STORE", mode)
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "test-model")
+    monkeypatch.setenv("APIFY_TOKEN", "" if missing_provider else "private-test-token")
+    monkeypatch.setenv("SERPAPI_KEY", "private-test-token")
+    monkeypatch.setenv("GEOAPIFY_KEY", "private-test-token")
+    path = tmp_path / "login.json"
+    monkeypatch.setenv("TRAVEL_ACCOUNTS_FILE", str(path))
+    if bad_accounts:
+        path.write_text("invalid JSON", encoding="utf-8")
+    monkeypatch.setattr("main.get_auth_store", lambda: auth_store)
+    auth_store.ping.return_value = True
+    if redis_down:
+        auth_store.ping.side_effect = ConnectionError("private-redis-host")
+
+    response = client.get("/ready", headers={"Authorization": ""})
+    assert response.status_code == expected
+    assert response.json() == {
+        "status": "ready" if expected == 200 else "not_ready",
+        "checks": {
+            "provider_configuration": "unavailable" if missing_provider else "ok",
+            "accounts": "unavailable" if bad_accounts else "ok",
+            "redis": "skipped_local_mode" if mode == "memory" else "unavailable" if redis_down else "ok",
+        },
+    }
+    assert response.headers["Cache-Control"] == "no-store"
+    assert client.get("/health").status_code == 200
+    assert auth_store.ping.call_count == (0 if mode == "memory" else 1)
     agent_factory.assert_not_called()
 
 

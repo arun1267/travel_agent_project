@@ -159,18 +159,31 @@ def test_nonnumeric_traveller_count_is_rejected(tools, http_post):
 def test_dispatch_calls_only_supported_tools(tools, monkeypatch):
     search = Mock(return_value={"hotels": []})
     monkeypatch.setattr(tools, "search_hotels", search)
-    args = {"destination": "Goa", "check_in_date": "2030-01-10", "check_out_date": "2030-01-12"}
+    args = {"destination": "Goa", "check_in_date": "2099-01-10", "check_out_date": "2099-01-12", "adults": 2}
     assert tools.run_tool("search_hotels", args) == {"hotels": []}
     search.assert_called_once_with(**args)
     with pytest.raises(ValueError, match="Unknown tool"):
         tools.run_tool("calculate_budget", {})
 
 
-@pytest.mark.parametrize("args", [{}, {"unexpected": True}])
-def test_dispatch_rejects_invalid_arguments(tools, http_get, args):
-    with pytest.raises(TypeError):
-        tools.run_tool("search_flights", args)
+@pytest.mark.parametrize(("name", "args"), [
+    ("search_flights", {}),
+    ("search_flights", {"origin": "DEL", "destination": "BOM", "departure_date": "2099-02-30", "adults": 2}),
+    ("search_flights", {"origin": "DEL", "destination": "BOM", "departure_date": "2099-01-10", "adults": True}),
+    ("search_flights", {"origin": "DEL", "destination": "BOM", "departure_date": "2099-01-10", "adults": 2,
+                        "trip_type": "one_way", "return_date": "2099-01-12"}),
+    ("search_hotels", {"destination": "Goa", "check_in_date": "2099-01-10", "check_out_date": "2099-01-09", "adults": 2}),
+    ("search_restaurants", {"destination": "Goa", "limit": "10"}),
+    ("search_restaurants", {"destination": "Goa", "limit": 21}),
+    ("search_attractions", {"destination": "Goa", "radius_meters": 50001}),
+    ("search_attractions", {"destination": "Goa", "unexpected": True}),
+    ("search_attractions", ["Goa"]),
+])
+def test_dispatch_rejects_invalid_arguments(tools, http_get, http_post, name, args):
+    with pytest.raises(ValueError, match="Invalid search arguments"):
+        tools.run_tool(name, args)
     http_get.assert_not_called()
+    http_post.assert_not_called()
 
 
 def test_transient_http_errors_recover_with_backoff(tools, http_get, response, monkeypatch):

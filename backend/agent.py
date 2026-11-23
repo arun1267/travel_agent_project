@@ -26,6 +26,7 @@ from redis.exceptions import RedisError
 from log import log_event, record_bedrock_usage, track_operation, track_request
 from memory import TravelMemory
 from prompt import SYSTEM_PROMPT
+from tool_arguments import InvalidToolArguments
 from tools import (
     DestinationNotFound,
     FlightProviderConfigurationError,
@@ -350,16 +351,18 @@ class TravelAgent:
 
                 calls = []
                 for block in assistant_message.get("content", []):
-                    if tool_use := block.get("toolUse"):
-                        name = tool_use["name"]
-                        arguments = tool_use.get("input", {})
+                    tool_use = block.get("toolUse")
+                    if isinstance(tool_use, dict) and isinstance(tool_use.get("toolUseId"), str):
+                        name = tool_use.get("name")
+                        name = name if isinstance(name, str) else ""
+                        arguments = tool_use.get("input")
                         cache_key = (name, json.dumps(arguments, sort_keys=True))
                         calls.append((tool_use, arguments, cache_key))
 
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     pending = {}
                     for tool_use, arguments, cache_key in calls:
-                        name = tool_use["name"]
+                        name = cache_key[0]
                         if name in unavailable or cache_key in searched or cache_key in pending:
                             continue
                         pending[cache_key] = executor.submit(
@@ -367,7 +370,7 @@ class TravelAgent:
                         )
 
                     for tool_use, _, cache_key in calls:
-                        tool_name = tool_use["name"]
+                        tool_name = cache_key[0]
                         label, key = TOOL_RESULTS.get(tool_name, ("Travel", ""))
                         logged_tool = tool_name if key else "unknown"
                         result, error = {}, None
@@ -385,6 +388,8 @@ class TravelAgent:
                                 unavailable[tool_name] = error
                             except FlightRouteError as route_error:
                                 error = str(route_error)
+                            except InvalidToolArguments as validation_error:
+                                error = str(validation_error)
                             except Exception:
                                 error = f"The {label.lower()} search could not be completed."
                             else:
