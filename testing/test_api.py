@@ -113,14 +113,21 @@ def test_chat_handles_agent_startup_failure(client, agent_factory):
     assert "private configuration" not in response.text
 
 
-def test_individual_searches_skip_bedrock(client, agent_factory, tools, http_get, response, monkeypatch):
+def test_individual_searches_skip_bedrock(client, agent_factory, tools, http_get, http_post, response, monkeypatch):
     monkeypatch.setattr("main.get_tools", lambda: tools)
+    http_post.return_value = response([
+        {"price": 2500, "currency": "INR", "segments": [
+            {"airline": "IndiGo", "departureAirport": "MAA", "arrivalAirport": "HYD"},
+        ]},
+        {"price": 3000, "currency": "INR", "segments": [
+            {"airline": "Air India", "departureAirport": "MAA", "arrivalAirport": "BLR"},
+            {"airline": "Air India Express", "departureAirport": "BLR", "arrivalAirport": "HYD"},
+        ]},
+        {"price": 4000, "currency": "INR", "segments": [
+            {"airline": "Unknown carrier", "departureAirport": "MAA", "arrivalAirport": "HYD"},
+        ]},
+    ])
     http_get.side_effect = [
-        response({"best_flights": [
-            {"price": 2500, "link": "https://airline.example/book", "flights": [{"airline": "IndiGo"}]},
-            {"price": 3000, "flights": [{"airline": "Air India"}, {"airline": "Air India Express"}]},
-            {"price": 4000, "flights": [{"airline": "Unknown carrier"}]},
-        ]}),
         response({"properties": [
             {"name": "Test Hotel", "link": "javascript:alert(1)"},
             {"name": "Property Website", "link": "https://hotel.example/"},
@@ -134,7 +141,7 @@ def test_individual_searches_skip_bedrock(client, agent_factory, tools, http_get
         "start_date": start.isoformat(), "travellers": 1,
     }).json()
     assert flights["return"] is None
-    assert flights["outbound"]["options"][0]["booking_link"] == "https://airline.example/book"
+    assert flights["outbound"]["options"][0]["booking_link"] is None
     first, mixed, unknown = flights["outbound"]["options"]
     assert first["airline_website"] == "https://www.goindigo.in/"
     assert mixed["airline_website"] is None
@@ -156,10 +163,14 @@ def test_individual_searches_skip_bedrock(client, agent_factory, tools, http_get
 
 
 def test_flight_search_resolves_supported_city_and_reports_unknown_city(
-    client, tools, http_get, response, monkeypatch,
+    client, tools, http_post, response, monkeypatch,
 ):
     monkeypatch.setattr("main.get_tools", lambda: tools)
-    http_get.return_value = response({"best_flights": [{"price": 2500}]})
+    http_post.return_value = response([
+        {"price": 2500, "currency": "INR", "segments": [
+            {"departureAirport": "COK", "arrivalAirport": "VTZ"},
+        ]},
+    ])
     trip = {
         "source": "Kochi", "destination": "Visakhapatnam", "trip_type": "oneway",
         "start_date": (date.today() + timedelta(days=1)).isoformat(), "travellers": 1,
@@ -167,9 +178,9 @@ def test_flight_search_resolves_supported_city_and_reports_unknown_city(
     result = client.post("/api/flights", json=trip)
     assert result.status_code == 200
     assert result.json()["outbound"]["options"][0]["price"] == 2500
-    params = http_get.call_args.kwargs["params"]
-    assert (params["departure_id"], params["arrival_id"]) == ("COK", "VTZ")
+    payload = http_post.call_args.kwargs["json"]
+    assert (payload["origins"], payload["destinations"]) == (["COK"], ["VTZ"])
     result = client.post("/api/flights", json={**trip, "destination": "Unknown Test City"})
     assert result.status_code == 422
     assert "Could not identify an airport" in result.json()["detail"]
-    http_get.assert_called_once()
+    http_post.assert_called_once()
