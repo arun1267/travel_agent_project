@@ -4,12 +4,42 @@ from unittest.mock import Mock
 import pytest
 from fastapi.testclient import TestClient
 
+from auth import digest, get_auth_store, token_key
+from local_auth_store import LocalAuthStore
 from main import app
 
 
 @pytest.fixture
-def client():
-    with TestClient(app) as client:
+def auth_store(monkeypatch):
+    monkeypatch.setenv("TRAVEL_CHAT_RATE_LIMIT", "10")
+    monkeypatch.setenv("TRAVEL_SEARCH_RATE_LIMIT", "30")
+    owner = digest("alice")
+    values = {token_key("alice-token"): owner, f"travel:session:{owner}:trip-1": "1"}
+    counts = {}
+    store = Mock()
+    store.get.side_effect = values.get
+
+    def save(key, value, *, ex, nx=False):
+        if nx and key in values:
+            return False
+        values[key] = value
+        return True
+
+    def count(_script, _keys, key, window):
+        counts[key] = counts.get(key, 0) + 1
+        return counts[key], window
+
+    store.set.side_effect = save
+    store.expire.side_effect = lambda key, ttl: key in values
+    store.delete.side_effect = lambda key: values.pop(key, None)
+    store.eval.side_effect = count
+    monkeypatch.setitem(app.dependency_overrides, get_auth_store, lambda: store)
+    return store
+
+
+@pytest.fixture
+def client(auth_store):
+    with TestClient(app, headers={"Authorization": "Bearer alice-token"}) as client:
         yield client
 
 
@@ -78,7 +108,11 @@ def test_chat_returns_structured_partial_results(client, agent_factory):
         assert option["segments"][0]["airline_website"] == option["airline_website"]
     assert flights["return"]["options"][0]["search_link"].startswith("https://")
     message, session = agent.chat_with_results.call_args.args
-    assert session == "trip-1"
+    assert agent.chat_with_results.call_args.kwargs["budget_inputs"] == {
+        "travellers": 2, "nights": (end - start).days, "total_budget": 30000,
+    }
+    assert session == f"{digest('alice')}:trip-1"
+    assert payload["session_id"] == "trip-1"
     assert "2 travellers" in message and end.isoformat() in message
 
 
@@ -111,6 +145,57 @@ def test_chat_handles_agent_startup_failure(client, agent_factory):
     response = client.post("/api/chat", json={"message": "Hello", "session_id": "trip-1"})
     assert response.status_code == 503
     assert "private configuration" not in response.text
+
+
+def test_signup_login_and_logout(client, monkeypatch, agent_factory, tmp_path):
+    account_file = tmp_path / "login.json"
+    monkeypatch.setenv("TRAVEL_ACCOUNTS_FILE", str(account_file))
+    store = LocalAuthStore()
+    store.set(f"travel:session:{digest('alice')}:trip-1", "1", ex=60)
+    monkeypatch.setitem(app.dependency_overrides, get_auth_store, lambda: store)
+    payload = {"message": "Hello", "session_id": "trip-1"}
+    assert client.post("/api/chat", json=payload, headers={"Authorization": ""}).status_code == 401
+    for endpoint in ("flights", "hotels", "restaurants"):
+        denied = client.post(f"/api/{endpoint}", json={}, headers={"Authorization": "Bearer invalid"})
+        assert denied.status_code == 401
+    credentials = {"username": "Alice", "password": "test password"}
+    assert client.post("/api/auth/login", json=credentials).status_code == 401
+    invalid = client.post("/api/auth/signup", json={**credentials, "password": "too short"})
+    assert invalid.status_code == 422
+    assert "too short" not in invalid.text
+    assert client.post("/api/auth/signup", json=credentials).status_code == 201
+    assert client.post("/api/auth/signup", json={**credentials, "username": "alice"}).status_code == 409
+    assert "test password" not in account_file.read_text(encoding="utf-8")
+    assert client.post("/api/auth/login", json={"username": "alice", "password": "wrong"}).status_code == 401
+    result = client.post("/api/auth/login", json={"username": "alice", "password": "test password"})
+    assert result.status_code == 200
+    headers = {"Authorization": f"Bearer {result.json()['access_token']}"}
+    agent_factory.return_value.chat_with_results.return_value = {
+        "answer": "Hello", "results": {}, "notices": [], "budget": None, "outcome": "success",
+    }
+    assert client.post("/api/chat", json=payload, headers=headers).status_code == 200
+    assert client.post("/api/auth/logout", headers=headers).status_code == 204
+    assert client.post("/api/chat", json=payload, headers=headers).status_code == 401
+
+
+def test_session_ownership_and_chat_rate_limit(client, auth_store, agent_factory):
+    auth_store.set(token_key("bob-token"), digest("bob"), ex=3600)
+    agent = agent_factory.return_value
+    agent.chat_with_results.return_value = {
+        "answer": "Hello", "results": {}, "notices": [], "budget": None, "outcome": "success",
+    }
+    first = client.post("/api/chat", json={"message": "Start my trip"})
+    assert first.status_code == 200
+    session = first.json()["session_id"]
+    payload = {"message": "What about the hotel?", "session_id": session}
+    assert client.post("/api/chat", json=payload, headers={"Authorization": "Bearer bob-token"}).status_code == 404
+    for _ in range(9):
+        assert client.post("/api/chat", json=payload).status_code == 200
+    denied = client.post("/api/chat", json=payload)
+    assert denied.status_code == 429
+    assert denied.headers["Retry-After"] == "60"
+    assert agent.chat_with_results.call_count == 10
+    assert agent.chat_with_results.call_args.args[1] == f"{digest('alice')}:{session}"
 
 
 def test_individual_searches_skip_bedrock(client, agent_factory, tools, http_get, http_post, response, monkeypatch):

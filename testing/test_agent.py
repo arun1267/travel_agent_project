@@ -62,7 +62,11 @@ def test_tool_response_ids_and_partial_budget(agent, monkeypatch):
         ),
         reply({"text": "Here are the available flights."}),
     ]
-    answer = agent.chat("2 travellers under 20000", "session")
+    result = agent.chat_with_results(
+        "2 travellers under 20000", "session",
+        budget_inputs={"travellers": 3, "nights": 0, "total_budget": 12345.67},
+    )
+    answer = result["answer"]
     assert "Here are the available flights." in answer
     assert "Hotel information is temporarily unavailable." in answer
     assert "Internal provider error" not in answer
@@ -74,6 +78,11 @@ def test_tool_response_ids_and_partial_budget(agent, monkeypatch):
     assert (hotel["toolUseId"], hotel["status"]) == ("hotel-id", "error")
     budget = json.loads(blocks[2]["text"].removeprefix("Budget calculation: "))
     assert budget["missing_costs"] == ["hotels"]
+    assert budget["travellers"] == 3
+    assert budget["nights"] == 0
+    assert budget["rooms"] is None
+    assert budget["stated_budget"] == 12345.67
+    assert budget["total_estimated"] == 3600
     assert budget["within_budget"] is None
     assert agent.memory.get_tool_result("session", "search_flights")["options"][0]["price"] == 1200
 
@@ -145,7 +154,23 @@ def test_round_trip_response_displays_all_five_choices_each_way(agent, monkeypat
 
 
 def test_follow_up_includes_same_session_history_and_search_context(agent, monkeypatch):
-    dispatch = Mock(return_value={"hotels": [{"name": "Test Hotel"}]})
+    hotels = {
+        "check_in": "2030-01-10",
+        "check_out": "2030-01-13",
+        "hotels": [{"name": "Test Hotel", "currency": "INR", "nightly_price": 2400, "total_price": 7200}],
+    }
+    flights = {
+        "origin": "DEL",
+        "destination": "GOI",
+        "currency": "INR",
+        "options": [{"price": 3400}],
+        "shared_return_options": [
+            {"price": 3800, "segments": [{"airline": "IndiGo", "departure_time": "2030-01-13T09:00"}]},
+            {"price": 4100, "segments": [{"airline": "Air India", "departure_time": "2030-01-13T13:30"}]},
+        ],
+    }
+    agent.memory.save_tool_result("goa", "search_flights", flights)
+    dispatch = Mock(return_value=hotels)
     monkeypatch.setattr(agent.tools, "run_tool", dispatch)
     agent.client.converse.side_effect = [
         reply(tool_call("search_hotels", "hotel-id"), stop_reason="tool_use"),
@@ -154,14 +179,18 @@ def test_follow_up_includes_same_session_history_and_search_context(agent, monke
         reply({"text": "Where would you like to go?"}),
     ]
     agent.chat("Find hotels in Goa", "goa")
-    agent.chat("Which hotel was that?", "goa")
+    agent.chat("How much was the hotel, and when does the second return flight leave?", "goa")
     follow_up = agent.client.converse.call_args.kwargs["messages"][:3]
     assert [message["role"] for message in follow_up] == ["user", "assistant", "user"]
     assert follow_up[0]["content"] == [{"text": "Find hotels in Goa"}]
     assert follow_up[1]["content"] == [{"text": "I found Test Hotel in Goa."}]
-    assert "Previous hotel search has 1 hotels stored" in follow_up[2]["content"][0]["text"]
+    context = follow_up[2]["content"][0]["text"]
+    saved_flights = context.split("Previous flight search: ", 1)[1].splitlines()[0]
+    saved_hotels = context.split("Previous hotel search: ", 1)[1].splitlines()[0]
+    assert json.loads(saved_flights) == flights
+    assert json.loads(saved_hotels) == hotels
     assert len(agent.memory.get_messages("goa")) == 4
-    assert agent.memory.get_tool_result("goa", "search_hotels")["hotels"] == [{"name": "Test Hotel"}]
+    assert agent.memory.get_tool_result("goa", "search_hotels") == hotels
 
     agent.chat("Help me plan a trip", "other")
     other = agent.client.converse.call_args.kwargs["messages"]

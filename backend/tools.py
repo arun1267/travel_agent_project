@@ -588,9 +588,9 @@ class TravelTools:
         self,
         flight_result: dict[str, Any] | None,
         hotel_result: dict[str, Any] | None,
-        travellers: int = 1,
-        nights: int = 1,
-        rooms: int = 1,
+        travellers: int | None = 1,
+        nights: int | None = 1,
+        rooms: int | None = 1,
         total_budget: float | None = None,
         food_per_person_per_day: float = 800.0,
         local_transport_per_day: float = 600.0,
@@ -601,9 +601,9 @@ class TravelTools:
         - Apify fares cover all travellers. Legacy fares are treated as per adult.
         - Hotel total_price is treated as the full stay cost.
         """
-        travellers = max(1, int(travellers))
-        nights = max(1, int(nights))
-        rooms = max(1, int(rooms))
+        travellers = max(1, int(travellers)) if travellers is not None else None
+        nights = max(0, int(nights)) if nights is not None else None
+        rooms = max(1, int(rooms)) if rooms is not None else None
 
         notes: list[str] = []
         warnings: list[str] = []
@@ -635,15 +635,21 @@ class TravelTools:
                 if best_price is not None:
                     if flight_result.get("prices_include_all_travellers"):
                         flight_cost = best_price
-                        flight_per_person = best_price / (flight_result.get("travellers") or travellers)
+                        fare_travellers = flight_result.get("travellers") or travellers
+                        if fare_travellers:
+                            flight_per_person = best_price / fare_travellers
                         notes.append("Apify fares cover all travellers in the flight search.")
                     else:
                         flight_per_person = best_price
-                        flight_cost = best_price * travellers
-                        notes.append(f"Per-adult flight fare multiplied by {travellers} travellers.")
-                    selected_flight_label = (
-                        f"Cheapest available option (per adult ≈ ₹{flight_per_person:,.0f})"
-                    )
+                        if travellers is not None:
+                            flight_cost = best_price * travellers
+                            notes.append(f"Per-adult flight fare multiplied by {travellers} travellers.")
+                        else:
+                            warnings.append("Traveller count is required to total the per-adult flight fare.")
+                    if flight_per_person is not None:
+                        selected_flight_label = (
+                            f"Cheapest available option (per adult ≈ ₹{flight_per_person:,.0f})"
+                        )
                 else:
                     warnings.append("No usable numeric flight price found.")
             else:
@@ -669,10 +675,7 @@ class TravelTools:
                 if best_total is not None:
                     hotel_cost = best_total
                     selected_hotel_name = best_hotel.get("name") or "Selected hotel"
-                    notes.append(
-                        "Hotel total_price is treated as the full stay cost "
-                        f"for {rooms} room(s) and {nights} night(s)."
-                    )
+                    notes.append("Hotel total_price covers the rooms and dates in the hotel search.")
                 else:
                     warnings.append("No usable numeric hotel total_price found.")
             else:
@@ -681,9 +684,16 @@ class TravelTools:
             warnings.append("Hotel search result missing.")
 
         # ---------- Daily estimates ----------
-        food_cost = food_per_person_per_day * travellers * nights
-        local_transport_cost = local_transport_per_day * nights
-        other_cost = other_per_day * nights
+        food_cost = (
+            food_per_person_per_day * travellers * nights
+            if travellers is not None and nights is not None else None
+        )
+        local_transport_cost = local_transport_per_day * nights if nights is not None else None
+        other_cost = other_per_day * nights if nights is not None else None
+        if nights is None:
+            warnings.append("Daily expenses require a known stay duration.")
+        elif travellers is None:
+            warnings.append("Food costs require a known traveller count.")
 
         notes.append(
             f"Food estimated at ₹{food_per_person_per_day:,.0f} per person per day."
@@ -705,6 +715,9 @@ class TravelTools:
             missing_costs.append("flights")
         if hotel_cost is None:
             missing_costs.append("hotels")
+        for label, cost in (("food", food_cost), ("local transport", local_transport_cost), ("other", other_cost)):
+            if cost is None:
+                missing_costs.append(label)
         remaining = None
         within_budget = None
         if total_budget is not None and total_estimated is not None:

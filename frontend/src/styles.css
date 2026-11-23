@@ -120,7 +120,7 @@ button { cursor: pointer; }
   .app-shell { height: 100dvh; min-height: 0; grid-template-rows: minmax(0, 1fr); }
   .main-content { min-height: 0; overflow: auto; }
   .mobile-brand { display: none; }
-  .dashboard { height: 100%; grid-template-rows: minmax(0, 1fr); }
+  .dashboard { height: calc(100% - 48px); grid-template-rows: minmax(0, 1fr); }
   .chat-messages, .results-panel { overscroll-behavior-y: contain; }
 }
 @media (max-width: 820px) {
@@ -172,3 +172,36 @@ button { cursor: pointer; }
   .trip-form { margin-left: 0; }
   .tf-row { grid-template-columns: 1fr; }
 }
+.sign-in-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #203b50 url("/travel-sign-in.jpg") center / cover no-repeat;
+}
+.sign-in-card {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid rgb(255 255 255 / 40%);
+  border-radius: 18px;
+  background: rgb(16 29 54 / 18%);
+  color: white;
+  text-shadow: 0 1px 3px #101d36, 0 0 7px #101d36;
+}
+.sign-in-card h1, .sign-in-card p { margin: 0; }
+.sign-in-card p { color: #ffe0e0; }
+.sign-in-card label { display: grid; gap: 6px; font-weight: 600; }
+.sign-in-card input { width: 100%; padding: 10px; border: 1px solid #8194b4; border-radius: 9px; background: rgb(255 255 255 / 92%); color: #17264b; }
+.sign-in-card button, .account-actions button {
+  padding: 9px 14px;
+  border: 1px solid #1769e8;
+  border-radius: 9px;
+  background: #1769e8;
+  color: white;
+}
+.sign-in-card button:disabled { opacity: .65; cursor: wait; }
+.sign-in-card .auth-switch { background: white; color: #1769e8; }
+.account-actions { display: flex; justify-content: flex-end; padding: 0 0 10px; }
+.account-actions button { background: white; color: #1769e8; }

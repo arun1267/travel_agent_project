@@ -117,6 +117,18 @@ Keep real credentials out of Git and out of Vite variables. The API loads
 `backend/.env` without overriding existing process environment variables.
 Use a local Redis URL when running outside Render's private network.
 
+In the frontend, select **Create an account**, then sign in with the
+username and password you chose. The API creates `backend/login.json` on
+the first sign-up and stores usernames with salted password hashes. Git
+ignores the file. To use a different writable path, set
+`TRAVEL_ACCOUNTS_FILE` and keep that file outside Git.
+
+For local development without Redis, set `TRAVEL_AUTH_STORE=memory` in
+`backend/.env` and restart the API. Use one backend worker. Accounts
+survive a restart, while tokens, rate counters, and session ownership
+expire on restart. Redis is still required for saved conversation history
+and previous search results. Use the Redis auth store when deploying.
+
 Start the API from the repository root:
 
 ```powershell
@@ -144,8 +156,15 @@ starting or building Vite if you use a different address.
 
 - `GET /health` checks the HTTP process without contacting providers.
 - `GET /api/cities` lists Indian airport cities for the trip form.
+- `POST /api/auth/signup` creates an account from `username` and `password`.
+  Usernames are case-insensitive. Passwords must have at least 12 characters.
+- `POST /api/auth/login` accepts `username` and `password` and returns a
+  bearer access token valid for one hour. `POST /api/auth/logout` revokes it.
+  Send `Authorization: Bearer <access_token>` for chat, searches, and sign-out.
 - `POST /api/chat` accepts `message`, `session_id`, and optional `trip`.
-  Use a unique session ID per conversation. A trip accepts `source`,
+  Omit `session_id` for a new conversation and reuse the returned
+  `session_id` for follow-ups. Only the signed-in owner can use the ID.
+  Sessions expire after six hours of inactivity. A trip accepts `source`,
   `destination`, `trip_type` (`round` or `oneway`), `travellers`,
   `start_date`, optional `budget`, and `end_date` for round trips.
   The response includes `answer`, `results`, `notices`, `budget`, and
@@ -173,7 +192,8 @@ property link. Use `search_link` when a website is missing. These website
 links open the airline or property site for the traveller to book there.
 Restaurants include a Maps link and a website when available.
 
-In Swagger UI, open **POST /api/flights → Try it out** and submit this example
+In Swagger UI, call **POST /api/auth/login**, then paste the returned access
+token into **Authorize**. Open **POST /api/flights → Try it out** and submit this example
 with future travel dates. Check the **Response body** for
 `outbound.options` and `return.options`.
 
@@ -195,12 +215,17 @@ with future travel dates. Check the **Response body** for
   `python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port "$PORT"`.
   In the Render backend service's **Environment** page, set `APIFY_TOKEN` for
   flights, `SERPAPI_KEY` for hotels, `GEOAPIFY_KEY` for places, `REDIS_URL`,
-  and `CORS_ORIGINS`. Deploy a revision that contains the Apify integration.
+  and `CORS_ORIGINS`. Set `TRAVEL_ACCOUNTS_FILE` to a path on a persistent
+  writable volume and run one backend worker with file-based accounts.
+  Serve the frontend and API over HTTPS.
   Open `/docs` on that deployed backend and try `POST /api/flights` with
   `source` set to `DEL`, `destination` set to `BOM`, `trip_type` set to
   `oneway`, `travellers` set to `1`, and a future `start_date`.
-  A successful search lists fares under `outbound.options`. The chat endpoint needs access
-  controls and rate limiting before public use with paid providers.
+  A successful search lists fares under `outbound.options`. Each authenticated
+  account can make 10 chat requests and 30 standalone search requests per
+  minute by default. Set `TRAVEL_CHAT_RATE_LIMIT` and `TRAVEL_SEARCH_RATE_LIMIT`
+  to change these limits. A rate-limited request returns HTTP 429 with a
+  `Retry-After` header.
 - **React app.** Set `VITE_API_BASE_URL` to the deployed API origin, run
   `npm ci` and `npm run build` in `frontend/`, then publish `frontend/dist/`
   to a static host. Include the frontend origin in the backend's `CORS_ORIGINS`.

@@ -8,6 +8,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from datetime import date
 from typing import Any
 
 import boto3
@@ -189,15 +190,12 @@ class TravelAgent:
             return None
 
     def _build_context_note(self, session_id: str) -> str:
-        """Inject a short note about previously stored structured results."""
+        """Provide saved search details for follow-up questions in this session."""
         stored = self._memory_call(self.memory.get_all_tool_results, session_id) or {}
         parts = []
-        if stored.get("flights"):
-            options = stored["flights"].get("options") or []
-            parts.append(f"Previous flight search has {len(options)} options stored.")
-        if stored.get("hotels"):
-            hotels = stored["hotels"].get("hotels") or []
-            parts.append(f"Previous hotel search has {len(hotels)} hotels stored.")
+        for key, label in (("flights", "flight"), ("hotels", "hotel")):
+            if stored.get(key):
+                parts.append(f"Previous {label} search: " + json.dumps(stored[key], ensure_ascii=False))
         if stored.get("attractions"):
             result = stored["attractions"]
             places = [
@@ -221,51 +219,10 @@ class TravelAgent:
             "\n\n[System note – previous structured tool results are available "
             "in memory for this session. Prefer using them for follow-up questions "
             "like 'compare option 2 and 4' instead of searching again unless the "
-            "user asks for a new search.]\n"
-            + " ".join(parts)
+            "user asks for a new search. Treat saved results as historical data "
+            "and preserve the saved option order when interpreting option numbers.]\n"
+            + "\n".join(parts)
         )
-
-    def _extract_trip_params(self, user_message: str) -> dict[str, Any]:
-        """Lightweight extraction of travellers, budget, nights from user text."""
-        travellers = 2
-        nights = 3
-        rooms = 1
-        total_budget = None
-
-        msg_lower = user_message.lower()
-
-        m_trav = re.search(
-            r"(\d+)\s*(?:people|travellers|travelers|adults|persons)", msg_lower
-        )
-        if m_trav:
-            travellers = max(1, int(m_trav.group(1)))
-
-        m_budget = re.search(r"(?:budget|under)\s*₹?\s*([\d,]+)", msg_lower)
-        if m_budget:
-            try:
-                total_budget = float(m_budget.group(1).replace(",", ""))
-            except ValueError:
-                pass
-
-        # Try to detect nights from date patterns (very simple)
-        dates = re.findall(r"\d{4}-\d{2}-\d{2}", user_message)
-        if len(dates) >= 2:
-            try:
-                from datetime import datetime
-                d1 = datetime.strptime(dates[0], "%Y-%m-%d")
-                d2 = datetime.strptime(dates[1], "%Y-%m-%d")
-                delta = (d2 - d1).days
-                if delta > 0:
-                    nights = delta
-            except Exception:
-                pass
-
-        return {
-            "travellers": travellers,
-            "nights": nights,
-            "rooms": rooms,
-            "total_budget": total_budget,
-        }
 
     def chat(
         self,
@@ -281,10 +238,12 @@ class TravelAgent:
         user_message: str,
         session_id: str,
         conversation_history: list[dict[str, Any]] | None = None,
+        *,
+        budget_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the answer and structured results from this request."""
         with track_request() as metrics:
-            return self._chat(user_message, session_id, conversation_history, metrics)
+            return self._chat(user_message, session_id, conversation_history, metrics, budget_inputs or {})
 
     def _run_search_tool(self, name, arguments):
         _, key = TOOL_RESULTS.get(name, ("Travel", ""))
@@ -297,7 +256,7 @@ class TravelAgent:
                 details["outcome"] = "empty"
             return result
 
-    def _chat(self, user_message, session_id, conversation_history, metrics) -> dict[str, Any]:
+    def _chat(self, user_message, session_id, conversation_history, metrics, budget_inputs) -> dict[str, Any]:
         if conversation_history is None:
             simple_history = self._memory_call(self.memory.get_messages, session_id) or []
             conversation_history = self.to_bedrock_history(simple_history)
@@ -467,10 +426,27 @@ class TravelAgent:
                 flight_result = current_results.get("search_flights")
                 hotel_result = current_results.get("search_hotels")
                 if tool_results and (flight_result or hotel_result):
+                    flight = flight_result or {}
+                    hotel = hotel_result or {}
+                    nights = budget_inputs.get("nights")
+                    if nights is None:
+                        start, end = (
+                            (hotel.get("check_in"), hotel.get("check_out"))
+                            if hotel.get("check_in") and hotel.get("check_out")
+                            else (flight.get("departure_date"), flight.get("return_date"))
+                        )
+                        if start and end:
+                            try:
+                                nights = (date.fromisoformat(end) - date.fromisoformat(start)).days
+                            except (TypeError, ValueError):
+                                pass
                     budget_data = self.tools.calculate_budget(
                         flight_result=flight_result,
                         hotel_result=hotel_result,
-                        **self._extract_trip_params(user_message),
+                        travellers=budget_inputs.get("travellers") or hotel.get("travellers") or flight.get("travellers"),
+                        nights=nights,
+                        rooms=hotel.get("rooms"),
+                        total_budget=budget_inputs.get("total_budget"),
                     )
                     tool_results.append({"text": "Budget calculation: " + json.dumps(budget_data)})
 

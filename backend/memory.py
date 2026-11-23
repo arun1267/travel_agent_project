@@ -20,7 +20,7 @@ class TravelMemory:
         prefix: str = "travel",
         ttl_seconds: int = 60 * 60 * 6,  # 6 hours
     ):
-        url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        url = redis_url or os.getenv("REDIS_URL") or "redis://localhost:6379/0"
         self.client = redis.from_url(
             url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1,
             retry=Retry(NoBackoff(), 0),

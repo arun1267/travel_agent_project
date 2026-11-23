@@ -5,10 +5,42 @@ export async function fetchCities(signal) {
   return response.ok ? response.json() : [];
 }
 
-export async function sendChatMessage(message, sessionId, trip = null) {
-  const response = await fetch(`${API_BASE_URL}/api/chat`, {
+export async function signIn(username, password) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(typeof error.detail === "string" ? error.detail : "Could not sign in.");
+  }
+  return response.json();
+}
+
+export async function signUp(username, password) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(typeof error.detail === "string" ? error.detail : "Check your username and password.");
+  }
+}
+
+export function signOut(token) {
+  return fetch(`${API_BASE_URL}/api/auth/logout`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function sendChatMessage(token, message, sessionId, trip = null) {
+  const response = await fetch(`${API_BASE_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       message,
       session_id: sessionId,
@@ -25,6 +57,11 @@ export async function sendChatMessage(message, sessionId, trip = null) {
   });
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 404 || response.status === 429) {
+      const error = new Error((await response.json()).detail);
+      error.status = response.status;
+      throw error;
+    }
     if (response.status === 422) {
       const error = await response.json();
       const detail = typeof error.detail === "string" ? error.detail : error.detail?.[0]?.msg;

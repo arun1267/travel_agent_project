@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from agent import TravelAgent
+from auth import chat_session, get_auth_store, limit_api, login, logout, signup
 from flight_view import flight_view
 from log import log_event, track_request
 from tools import (
@@ -32,8 +35,20 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in allowed_origins.split(",") if origin.strip()],
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Retry-After"],
 )
+
+app.post("/api/auth/login")(login)
+app.post("/api/auth/signup", status_code=201)(signup)
+app.post("/api/auth/logout", status_code=204)(logout)
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(request: Request, error: RequestValidationError):
+    if request.url.path in {"/api/auth/signup", "/api/auth/login"}:
+        return JSONResponse(status_code=422, content={"detail": "Check your username and password."})
+    return await request_validation_exception_handler(request, error)
 
 City = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
@@ -75,11 +90,12 @@ class TripDetails(BaseModel):
 
 class ChatRequest(BaseModel):
     message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
-    session_id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
+    session_id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,128}$")] | None = None
     trip: TripDetails | None = None
 
 
 class ChatResponse(BaseModel):
+    session_id: str
     answer: str
     results: dict[str, dict[str, Any] | None]
     notices: list[str]
@@ -154,7 +170,7 @@ def cities() -> list[str]:
     }, key=str.casefold)
 
 
-@app.post("/api/flights")
+@app.post("/api/flights", dependencies=[Depends(limit_api)])
 def flights(request: TripDetails):
     result = run_search(
         "search_flights", origin=request.source, destination=request.destination,
@@ -166,7 +182,7 @@ def flights(request: TripDetails):
     return flight_view(result)
 
 
-@app.post("/api/hotels")
+@app.post("/api/hotels", dependencies=[Depends(limit_api)])
 def hotels(request: HotelSearch):
     return run_search(
         "search_hotels", destination=request.destination,
@@ -176,13 +192,14 @@ def hotels(request: HotelSearch):
     )
 
 
-@app.post("/api/restaurants")
+@app.post("/api/restaurants", dependencies=[Depends(limit_api)])
 def restaurants(request: RestaurantSearch):
     return run_search("search_restaurants", **request.model_dump())
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, user: str = Depends(limit_api), client=Depends(get_auth_store)):
+    session_id = chat_session(client, user, request.session_id)
     # Validate the request before constructing clients or invoking providers.
     try:
         agent = get_agent()
@@ -190,10 +207,17 @@ def chat(request: ChatRequest):
         log_event("agent_initialization_failed", error_type=type(error).__name__)
         return JSONResponse(status_code=503, content={"detail": "The travel planner is temporarily unavailable."})
     message = request.message
+    budget_inputs = {}
     if request.trip is not None:
         message = f"Trip details: {request.trip.context()}.\n\nUser request: {message}"
-    response = agent.chat_with_results(message, request.session_id)
+        trip = request.trip
+        budget_inputs = {
+            "travellers": trip.travellers,
+            "nights": (trip.end_date - trip.start_date).days if trip.end_date is not None else None,
+            "total_budget": trip.budget,
+        }
+    response = agent.chat_with_results(message, f"{user}:{session_id}", budget_inputs=budget_inputs)
     result = response["results"].get("flights")
     if result:
         response["results"]["flights"] = flight_view(result)
-    return response
+    return {**response, "session_id": session_id}

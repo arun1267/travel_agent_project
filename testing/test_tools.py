@@ -118,6 +118,16 @@ def test_budget_with_missing_hotel_cost_is_a_subtotal(tools):
     assert result["remaining_budget"] is None
 
 
+def test_budget_with_unknown_stay_duration_omits_daily_costs(tools):
+    result = tools.calculate_budget(
+        {"options": [{"price": 1000}]}, None, travellers=2, nights=None, rooms=None, total_budget=5000,
+    )
+    assert result["total_estimated"] == 2000
+    assert result["missing_costs"] == ["hotels", "food", "local transport", "other"]
+    assert result["within_budget"] is None
+    assert result["remaining_budget"] is None
+
+
 def test_round_trip_requires_return_date(tools, http_post):
     with pytest.raises(ValueError, match="return_date is required"):
         tools.search_flights("DEL", "BOM", "2030-01-10", trip_type="round_trip")
