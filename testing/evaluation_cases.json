@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "tools-restaurants-only",
+      "metric": "tool_selection",
+      "message": "Find restaurants in Panaji, Goa within 3 km. Give me up to 5 options.",
+      "expected": {
+        "required_tools": ["search_restaurants"],
+        "allowed_tools": ["search_restaurants"],
+        "arguments": {"search_restaurants": {"radius_meters": 3000, "limit": 5}}
+      }
+    },
+    {
+      "id": "tools-one-way-flights",
+      "metric": "tool_selection",
+      "message": "Search only for one-way flights from Hyderabad to Goa for two adults on {departure}. Skip hotels and sightseeing.",
+      "expected": {
+        "required_tools": ["search_flights"],
+        "allowed_tools": ["search_flights"],
+        "arguments": {"search_flights": {"departure_date": "{departure}", "trip_type": "one_way", "adults": 2}},
+        "absent_or_null_arguments": {"search_flights": ["return_date"]}
+      }
+    },
+    {
+      "id": "budget-exact-fit",
+      "metric": "budget_accuracy",
+      "message": "Search flights and hotels only for a Hyderabad to Goa round trip from {departure} to {return_date} for two adults. My budget is ₹20,000. Tell me the total and whether it fits.",
+      "budget_inputs": {"travellers": 2, "nights": 2, "rooms": 1, "total_budget": 20000},
+      "tool_results": {
+        "search_flights": {
+          "trip_type": "round_trip",
+          "travellers": 2,
+          "prices_include_all_travellers": true,
+          "options": [{"round_trip_price_from": 8400}]
+        },
+        "search_hotels": {"hotels": [{"name": "Harbour Hotel", "total_price": 6600}]}
+      },
+      "expected": {
+        "required_tools": ["search_flights", "search_hotels"],
+        "allowed_tools": ["search_flights", "search_hotels"],
+        "answer_checks": ["Give the ₹20,000 estimated total", "Say it fits the budget exactly"],
+        "budget": {"flight_total": 8400, "hotel_total": 6600, "total_estimated": 20000, "remaining_budget": 0, "within_budget": true}
+      }
+    },
+    {
+      "id": "budget-missing-hotel",
+      "metric": "budget_accuracy",
+      "message": "Search one-way flights from Hyderabad to Goa on {departure} and one night of hotels, for two adults. My budget is ₹10,000. Can you confirm the whole trip fits if the hotel price is missing?",
+      "budget_inputs": {"travellers": 2, "nights": 1, "rooms": 1, "total_budget": 10000},
+      "tool_results": {
+        "search_flights": {"travellers": 2, "prices_include_all_travellers": true, "options": [{"price": 4200}]},
+        "search_hotels": null
+      },
+      "expected": {
+        "required_tools": ["search_flights", "search_hotels"],
+        "allowed_tools": ["search_flights", "search_hotels"],
+        "budget": {"flight_total": 4200, "hotel_total": null, "total_estimated": 6700, "remaining_budget": null, "within_budget": null, "missing_costs": ["hotels"]},
+        "answer_checks": ["Call ₹6,700 a subtotal", "Say the hotel cost is missing", "Do not claim the full trip fits"]
+      }
+    },
+    {
+      "id": "grounding-missing-fare",
+      "metric": "hallucinations",
+      "message": "How much does the saved outbound flight cost?",
+      "saved_results": {"search_flights": {"options": [{"price": null, "segments": [{"airline": "IndiGo", "departure_time": "{departure}T09:10"}]}]}},
+      "expected": {
+        "answer_checks": ["Say the fare is unavailable", "Do not give a numeric fare"],
+        "allowed_tools": []
+      }
+    },
+    {
+      "id": "grounding-no-hotel-results",
+      "metric": "hallucinations",
+      "message": "Find hotels in Goa from {departure} to {return_date} for two adults.",
+      "tool_results": {"search_hotels": {"destination": "Goa", "check_in": "{departure}", "check_out": "{return_date}", "travellers": 2, "rooms": 1, "hotels": []}},
+      "expected": {
+        "required_tools": ["search_hotels"],
+        "allowed_tools": ["search_hotels"],
+        "answer_checks": ["Say the search returned no hotel options", "Do not invent a property, price, or availability"]
+      }
+    },
+    {
+      "id": "follow-up-second-return",
+      "metric": "follow_up_accuracy",
+      "history": [
+        {"role": "user", "content": "Find round-trip flights from Hyderabad to Goa."},
+        {"role": "assistant", "content": "I found two return options."}
+      ],
+      "message": "What time does the second return flight leave, and what is its fare?",
+      "saved_results": {
+        "search_flights": {
+          "trip_type": "round_trip",
+          "currency": "INR",
+          "shared_return_options": [
+            {"price": 3800, "segments": [{"airline": "IndiGo", "departure_time": "{return_date}T09:00"}]},
+            {"price": 4100, "segments": [{"airline": "Air India", "departure_time": "{return_date}T13:30"}]}
+          ]
+        }
+      },
+      "expected": {
+        "answer_checks": ["Second return departs at 13:30 (1:30 PM)", "Second return fare is ₹4,100"],
+        "allowed_tools": []
+      }
+    },
+    {
+      "id": "follow-up-hotel-total",
+      "metric": "follow_up_accuracy",
+      "history": [
+        {"role": "user", "content": "Find a hotel in Goa for three nights."},
+        {"role": "assistant", "content": "I found Harbour Hotel."}
+      ],
+      "message": "What was the total for the stay at Harbour Hotel, and what was the nightly rate?",
+      "saved_results": {
+        "search_hotels": {
+          "destination": "Goa",
+          "hotels": [{"name": "Harbour Hotel", "nightly_price": 2400, "total_price": 7200, "currency": "INR"}]
+        }
+      },
+      "expected": {
+        "answer_checks": ["Total stay costs ₹7,200", "Nightly rate is ₹2,400"],
+        "allowed_tools": []
+      }
+    }
+  ]
+}
