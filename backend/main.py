@@ -19,6 +19,7 @@ from agent import TravelAgent
 from auth import accounts_path, chat_session, get_auth_store, limit_api, load_accounts, login, logout, signup
 from flight_view import flight_view
 from log import log_event, track_request
+from memory import TravelMemory
 from tools import (
     DestinationNotFound,
     FlightProviderConfigurationError,
@@ -106,7 +107,7 @@ class ChatResponse(BaseModel):
 
 @lru_cache(maxsize=1)
 def get_agent() -> TravelAgent:
-    return TravelAgent(tools=get_tools())
+    return TravelAgent(tools=get_tools(), memory=TravelMemory(client=get_auth_store()))
 
 
 @lru_cache(maxsize=1)

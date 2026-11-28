@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -7,7 +8,7 @@ from redis.exceptions import ConnectionError
 
 from auth import digest, get_auth_store, token_key
 from local_auth_store import LocalAuthStore
-from main import app
+from main import app, get_agent
 
 
 @pytest.fixture
@@ -54,6 +55,51 @@ def agent_factory(monkeypatch):
 def test_health_does_not_initialize_agent(client, agent_factory):
     assert client.get("/health").json() == {"status": "ok"}
     agent_factory.assert_not_called()
+
+
+def test_local_chat_follow_up_retains_flight_fare(client, monkeypatch, tools):
+    store = LocalAuthStore()
+    store.set(token_key("alice-token"), digest("alice"), ex=60)
+    monkeypatch.setitem(app.dependency_overrides, get_auth_store, lambda: store)
+    monkeypatch.setattr("main.get_auth_store", lambda: store)
+    monkeypatch.setattr("main.get_tools", lambda: tools)
+    bedrock = Mock()
+    monkeypatch.setattr("agent.boto3.client", Mock(return_value=bedrock))
+    monkeypatch.setattr("main.get_agent", get_agent.__wrapped__)
+    departure = (date.today() + timedelta(days=1)).isoformat()
+    search_result = {
+        "source": "Hyderabad", "destination": "Goa", "departure_date": departure,
+        "currency": "INR", "trip_type": "one_way", "search_mode": "one_way", "travellers": 2,
+        "prices_include_all_travellers": True, "options": [{"price": 8400}],
+    }
+    search = Mock(return_value=search_result)
+    monkeypatch.setattr(tools, "search_flights", search)
+    bedrock.converse.side_effect = [
+        {"stopReason": "tool_use", "output": {"message": {"role": "assistant", "content": [
+            {"toolUse": {"toolUseId": "flight", "name": "search_flights", "input": {
+                "origin": "HYD", "destination": "GOI", "departure_date": departure, "adults": 2,
+            }}},
+        ]}}},
+        {"stopReason": "end_turn", "output": {"message": {"role": "assistant", "content": [
+            {"text": "I found a flight."},
+        ]}}},
+        {"stopReason": "end_turn", "output": {"message": {"role": "assistant", "content": [
+            {"text": "The saved fare is ₹4,200 per person."},
+        ]}}},
+    ]
+    first = client.post("/api/chat", json={"message": "Find flights from Hyderabad to Goa."})
+    assert first.status_code == 200
+    follow_up = client.post("/api/chat", json={
+        "session_id": first.json()["session_id"], "message": "What is the flight cost per person?",
+    })
+    assert follow_up.status_code == 200
+    messages = bedrock.converse.call_args.kwargs["messages"]
+    context = next(
+        block["text"] for message in messages for block in message["content"]
+        if "Previous flight search: " in block.get("text", "")
+    )
+    assert json.loads(context.split("Previous flight search: ", 1)[1].splitlines()[0]) == search_result
+    search.assert_called_once()
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""Process-local access tokens, session ownership, and request counters."""
+"""Process-local tokens, rate counters, and conversation state."""
 
 from threading import Lock
 from time import monotonic
@@ -37,9 +37,10 @@ class LocalAuthStore:
             self._values[key] = (self._values[key][0], now + seconds)
             return True
 
-    def delete(self, key):
+    def delete(self, *keys):
         with self._lock:
-            self._values.pop(key, None)
+            for key in keys:
+                self._values.pop(key, None)
 
     def increment_rate(self, key, window):
         with self._lock:

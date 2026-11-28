@@ -1,4 +1,4 @@
-"""Redis-backed short-term memory for the travel agent."""
+"""Short-term memory for the travel agent."""
 
 from __future__ import annotations
 
@@ -19,9 +19,11 @@ class TravelMemory:
         redis_url: str | None = None,
         prefix: str = "travel",
         ttl_seconds: int = 60 * 60 * 6,  # 6 hours
+        *,
+        client=None,
     ):
         url = redis_url or os.getenv("REDIS_URL") or "redis://localhost:6379/0"
-        self.client = redis.from_url(
+        self.client = client if client is not None else redis.from_url(
             url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1,
             retry=Retry(NoBackoff(), 0),
         )
@@ -46,8 +48,7 @@ class TravelMemory:
             "meta",
         ):
             key = self._key(session_id, name)
-            if self.client.exists(key):
-                self.client.expire(key, self.ttl)
+            self.client.expire(key, self.ttl)
 
     # ------------------------------------------------------------------
     # Messages

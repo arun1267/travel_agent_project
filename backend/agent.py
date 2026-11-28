@@ -221,7 +221,11 @@ class TravelAgent:
             "in memory for this session. Prefer using them for follow-up questions "
             "like 'compare option 2 and 4' instead of searching again unless the "
             "user asks for a new search. Treat saved results as historical data "
-            "and preserve the saved option order when interpreting option numbers.]\n"
+            "and preserve the saved option order when interpreting option numbers. "
+            "For a per-person flight fare, divide a saved group fare by the "
+            "saved traveller count only when prices_include_all_travellers is true. "
+            "When a saved fare is already per adult, use it directly. Use saved "
+            "route and dates when available instead of asking for them again.]\n"
             + "\n".join(parts)
         )
 

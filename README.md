@@ -144,9 +144,9 @@ ignores the file. To use a different writable path, set
 
 For local development without Redis, set `TRAVEL_AUTH_STORE=memory` in
 `backend/.env` and restart the API. Use one backend worker. Accounts
-survive a restart, while tokens, rate counters, and session ownership
-expire on restart. Redis is still required for saved conversation history
-and previous search results. Use the Redis auth store when deploying.
+survive a restart. Tokens, rate counters, chat sessions, and saved search
+results stay in the backend process and reset on restart. Use the Redis
+store when deploying.
 
 Start the API from the repository root:
 
@@ -365,8 +365,8 @@ credentials, and raw exception messages.
 - Food, local transport, and miscellaneous costs are estimates. Missing
   fares or hotel prices can prevent a full budget comparison.
 - Saved search details cover the latest chat search of each type in the same
-  session. Standalone search endpoints return results directly. Redis is
-  required to recall chat history and previous searches across requests.
+  session. Standalone search endpoints return results directly. Local
+  memory mode retains history and search results until expiry or restart.
 - My Trips is a placeholder.
 
 ## Implementation and attribution
